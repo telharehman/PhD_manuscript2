@@ -1,0 +1,2205 @@
+---
+title: "Reflectance Measurements from Aerial and Proximal Sensors Provide Similar Precision in Predicting Rice Yield Response to Mid-Season N Applications"
+author: "Telha H. Rehman"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+# START
+
+```{r}
+
+Sys.time()
+
+```
+
+```{r, echo = FALSE}
+
+library(knitr)
+
+```
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+knitr::opts_knit$set(root.dir = "~/Desktop/Ph.D. Horticulture and Agronomy/PhD_manuscript2/R_project_GitHub/PhD_manuscript2/")
+
+```
+
+```{r , message=FALSE}
+
+library(tinytex)
+library(tidyverse)
+library(dplyr)
+library(cowplot)
+library(Cairo)
+library(modelr)
+library(gridExtra)
+library(nlme)
+library(car)
+library(emmeans)
+library(MuMIn)
+library(ggpmisc)
+library(gtable)
+library(grid)
+library(segmented)
+library(scales)
+library(sm)
+library(rcompanion)
+library(nlstools)
+library(magick)
+library(multcomp)
+library(wesanderson)
+
+```
+
+# DATA
+
+## GreenSeeker NDVI Data
+
+```{r}
+
+gs_ndvi_data <- read_csv(file = "DATA/PI_greenseeker_data.csv")
+
+str(gs_ndvi_data , give.attr = FALSE)
+
+gs_ndvi_data <- gs_ndvi_data %>% 
+  filter(!year %in% c("2015" , "2016" , "2018") & N_level_kgha != 275) #remove the years we don't need for this analysis and also the N rate that is too high 
+
+str(gs_ndvi_data , give.attr = FALSE)
+
+gs_ndvi_data <- gs_ndvi_data[c(1:144), c(1:17)] #removes the empty rows and columns from the data frame
+
+gs_ndvi_data$block <- factor(gs_ndvi_data$block) 
+gs_ndvi_data$year <- factor(gs_ndvi_data$year)
+gs_ndvi_data$plot <- factor(gs_ndvi_data$plot) 
+gs_ndvi_data$N_level_kgha_f <- factor(gs_ndvi_data$N_level_kgha)
+gs_ndvi_data$exp_plot_number <- factor(gs_ndvi_data$exp_plot_number)
+gs_ndvi_data$site_year <- factor(gs_ndvi_data$site_year , levels = c( "Nicolaus-17" , "Williams-17" , "Arbuckle-19" , "Davis-19" , "Marysville-19" , "RES-19" ))
+gs_ndvi_data$NDVI_1 <- as.numeric(as.character(gs_ndvi_data$NDVI_1))
+gs_ndvi_data$NDVI_2 <- as.numeric(as.character(gs_ndvi_data$NDVI_2))
+gs_ndvi_data$NDVI_3 <- as.numeric(as.character(gs_ndvi_data$NDVI_3))
+gs_ndvi_data$NDVI_4 <- as.numeric(as.character(gs_ndvi_data$NDVI_4)) #gets the data right
+
+str(gs_ndvi_data , give.attr = FALSE)
+
+gs_ndvi_data <-  gs_ndvi_data %>% 
+  mutate( biomass_dry_wt = biomass_plus_bag_g - (paper_bag_g * num_of_paper_bags) ,
+          aboveground_biomass = (biomass_dry_wt / ring_size) * 10 ,
+          n_content = sample_N_ug / sample_weight_mg ,
+          PI_N_Uptake = (aboveground_biomass * n_content) / 1000 #n uptake in kg per ha
+          )#processes the data
+
+
+gs_ndvi_data <- gs_ndvi_data %>% 
+  rowwise() %>% 
+  mutate(gs_NDVI = mean(c( NDVI_1 , NDVI_2 , NDVI_3 , NDVI_4) , na.rm = T)) #takes average of four NDVI readings
+
+gs_ndvi_data <- dplyr::select(gs_ndvi_data ,
+                      site_year,
+                      year,
+                      exp_plot_number,
+                      N_level_kgha,
+                      aboveground_biomass,
+                      n_content,
+                      PI_N_Uptake,
+                      gs_NDVI) #selects the relevant columns
+
+gs_ndvi_data$site_year <- factor(gs_ndvi_data$site_year , levels = c( "Nicolaus-17" , "Williams-17" , "Arbuckle-19" , "Davis-19" , "Marysville-19" , "RES-19")) #orders site-years alphabetically
+
+hist(gs_ndvi_data$aboveground_biomass)
+hist(gs_ndvi_data$n_content)
+hist(gs_ndvi_data$PI_N_Uptake)
+hist(gs_ndvi_data$gs_NDVI)
+```
+
+## Drone Data
+
+```{r}
+
+drone_data <- read_csv(file = "DATA/PI_drone_data.csv")
+
+str(drone_data , give.attr = FALSE)
+
+drone_data <- drone_data %>% 
+  filter(N_level_kgha != 275 & year != 2018) %>% 
+  mutate(year = factor(year) ,
+         exp_plot_number = factor(exp_plot_number) ,
+         Block = factor(Block) ,
+         MainPlot = factor(MainPlot) ,
+         N_level = factor(N_level) ,
+         N_level_kgha_f = factor(N_level_kgha)
+  )
+
+drone_data$site_year <- factor(drone_data$site_year , levels = c("Nicolaus-17" , "Williams-17" , "Arbuckle-19" , "Davis-19" , "Marysville-19" , "RES-19"))
+
+str(drone_data , give.attr = FALSE)
+
+drone_data <- dplyr::select(drone_data ,
+                      site_year,
+                      year,
+                      exp_plot_number,
+                      Block,
+                      MainPlot,
+                      N_level,
+                      N_level_kgha,
+                      N_level_kgha_f,
+                      biomass_plus_bag_g,
+                      ring_size,
+                      paper_bag_g,
+                      num_of_paper_bags,
+                      sample_weight_mg,
+                      sample_N_ug,
+                      bluemean,
+                      greenmean,
+                      redmean,
+                      edgemean,
+                      nirmean
+                      )#selects the relevant columns
+
+str(drone_data , give.attr = FALSE)
+
+#visualize drone_data to look for outliers
+
+boxplot(drone_data$bluemean)
+hist(drone_data$bluemean)
+
+boxplot(drone_data$greenmean)
+hist(drone_data$greenmean)
+
+boxplot(drone_data$redmean)
+hist(drone_data$redmean)
+
+boxplot(drone_data$edgemean)
+hist(drone_data$edgemean)
+
+boxplot(drone_data$nirmean)
+hist(drone_data$nirmean)
+
+drone_data <-  drone_data %>% 
+  mutate( biomass_dry_wt = biomass_plus_bag_g - (paper_bag_g * num_of_paper_bags) ,
+          aboveground_biomass = (biomass_dry_wt / ring_size) * 10 , #ring size 0.5 m^2 biomass in kg per ha
+          n_content = sample_N_ug / sample_weight_mg ,
+          PI_N_Uptake = (aboveground_biomass * n_content) / 1000 #n uptake in kg per ha
+          )#processes the data2
+
+boxplot(drone_data$PI_N_Uptake)
+hist(drone_data$PI_N_Uptake)
+
+drone_data <- drone_data %>% 
+  mutate(uas_NDRE = ((nirmean - edgemean) / (nirmean + edgemean)) ,
+         uas_NDVI = ((nirmean - redmean) / (nirmean + redmean))
+         ) #calculates NDRE and NDVI
+
+boxplot(drone_data$uas_NDRE)
+hist(drone_data$uas_NDRE)
+
+boxplot(drone_data$uas_NDVI)
+hist(drone_data$uas_NDVI)
+
+ggplot(data = drone_data, aes(x = PI_N_Uptake , y = uas_NDRE )) +
+  geom_point(mapping = aes(x = PI_N_Uptake , y = uas_NDRE , shape = site_year) , data = drone_data) +
+  theme_classic() +
+  scale_shape_manual(values = seq(4:20)) +
+  coord_cartesian(ylim = c(0,1))
+
+ggplot(data = drone_data, aes(x = PI_N_Uptake , y = uas_NDVI )) +
+  geom_point(mapping = aes(x = PI_N_Uptake , y = uas_NDVI , shape = site_year) , data = drone_data) +
+  theme_classic() +
+  scale_shape_manual(values = seq(4:20)) +
+  coord_cartesian(ylim = c(0,1))
+
+drone_data <- dplyr::select(drone_data ,
+                      site_year,
+                      year,
+                      exp_plot_number,
+                      Block,
+                      MainPlot,
+                      uas_NDVI,
+                      uas_NDRE) #selects the relevant columns
+
+str(drone_data , give.attr = FALSE)
+
+PI_data <- full_join(gs_ndvi_data , drone_data ) #joins greenseeker and drone data
+
+PI_data <- PI_data %>% 
+  mutate(N_level_kgha_f = factor(N_level_kgha))
+
+PI_data <- dplyr::select(PI_data ,
+                      site_year,
+                      year,
+                      exp_plot_number,
+                      Block,
+                      MainPlot,
+                      N_level_kgha,
+                      N_level_kgha_f,
+                      aboveground_biomass,
+                      n_content,
+                      PI_N_Uptake,
+                      gs_NDVI,
+                      uas_NDVI,
+                      uas_NDRE) #selects the relevant columns
+
+```
+
+## Calculating SI
+
+```{r}
+
+max_PI_data <- PI_data %>%
+  dplyr::select(site_year , gs_NDVI , uas_NDVI , uas_NDRE) %>%
+  group_by(site_year) %>%
+  summarise_all(.funs = quantile, probs = 0.95) %>%
+  ungroup()
+
+nic17 <- subset(max_PI_data, site_year == "Nicolaus-17")
+nic17max_gs_NDVI <- as.numeric(nic17$gs_NDVI)
+nic17max_uas_NDVI <- as.numeric(nic17$uas_NDVI)
+nic17max_uas_NDRE <- as.numeric(nic17$uas_NDRE)
+
+
+wil17 <- subset(max_PI_data, site_year == "Williams-17")
+wil17max_gs_NDVI <- as.numeric(wil17$gs_NDVI)
+wil17max_uas_NDVI <- as.numeric(wil17$uas_NDVI)
+wil17max_uas_NDRE <- as.numeric(wil17$uas_NDRE)
+
+
+arb19 <- subset(max_PI_data, site_year == "Arbuckle-19")
+arb19max_gs_NDVI <- as.numeric(arb19$gs_NDVI)
+arb19max_uas_NDVI <- as.numeric(arb19$uas_NDVI)
+arb19max_uas_NDRE <- as.numeric(arb19$uas_NDRE)
+
+
+mry19 <- subset(max_PI_data, site_year == "Marysville-19")
+mry19max_gs_NDVI <- as.numeric(mry19$gs_NDVI)
+mry19max_uas_NDVI <- as.numeric(mry19$uas_NDVI)
+mry19max_uas_NDRE <- as.numeric(mry19$uas_NDRE)
+
+
+dav19 <- subset(max_PI_data, site_year == "Davis-19")
+dav19max_gs_NDVI <- as.numeric(dav19$gs_NDVI)
+dav19max_uas_NDVI <- as.numeric(dav19$uas_NDVI)
+dav19max_uas_NDRE <- as.numeric(dav19$uas_NDRE)
+
+
+res19 <- subset(max_PI_data, site_year == "RES-19")
+res19max_gs_NDVI <- as.numeric(res19$gs_NDVI)
+res19max_uas_NDVI <- as.numeric(res19$uas_NDVI)
+res19max_uas_NDRE <- as.numeric(res19$uas_NDRE)
+
+PI_data <- PI_data %>% 
+  mutate(max_gs_NDVI = case_when(
+                          site_year == "Nicolaus-17" ~ nic17max_gs_NDVI ,
+                          site_year == "Williams-17" ~ wil17max_gs_NDVI ,
+                          site_year == "Arbuckle-19" ~ arb19max_gs_NDVI ,
+                          site_year == "Davis-19" ~ dav19max_gs_NDVI ,
+                          site_year == "Marysville-19" ~ mry19max_gs_NDVI ,
+                          site_year == "RES-19" ~ res19max_gs_NDVI))
+
+PI_data <- PI_data %>% 
+  mutate(max_uas_NDVI = case_when(
+                          site_year == "Nicolaus-17" ~ nic17max_uas_NDVI ,
+                          site_year == "Williams-17" ~ wil17max_uas_NDVI ,
+                          site_year == "Arbuckle-19" ~ arb19max_uas_NDVI ,
+                          site_year == "Davis-19" ~ dav19max_uas_NDVI ,
+                          site_year == "Marysville-19" ~ mry19max_uas_NDVI ,
+                          site_year == "RES-19" ~ res19max_uas_NDVI))
+
+PI_data <- PI_data %>% 
+  mutate(max_uas_NDRE = case_when(
+                          site_year == "Nicolaus-17" ~ nic17max_uas_NDRE ,
+                          site_year == "Williams-17" ~ wil17max_uas_NDRE ,
+                          site_year == "Arbuckle-19" ~ arb19max_uas_NDRE ,
+                          site_year == "Davis-19" ~ dav19max_uas_NDRE ,
+                          site_year == "Marysville-19" ~ mry19max_uas_NDRE ,
+                          site_year == "RES-19" ~ res19max_uas_NDRE))
+
+PI_data <- PI_data %>%
+  mutate(gs_NDVI_Sufficiency_Index =  gs_NDVI / max_gs_NDVI ,
+         uas_NDVI_Sufficiency_Index = uas_NDVI / max_uas_NDVI ,
+         uas_NDRE_Sufficiency_Index = uas_NDRE / max_uas_NDRE) #calculates the sufficiency indices
+
+PI_data_test <- PI_data %>% 
+  filter(gs_NDVI_Sufficiency_Index > 1)
+
+length(PI_data_test$gs_NDVI_Sufficiency_Index) / length(PI_data$gs_NDVI_Sufficiency_Index)
+
+PI_data_test <- PI_data %>% 
+  filter(uas_NDRE_Sufficiency_Index > 1)
+
+length(PI_data_test$uas_NDRE_Sufficiency_Index) /length(PI_data$uas_NDRE_Sufficiency_Index)
+
+
+```
+
+## Yield Data
+
+```{r}
+
+yield_data <- read_csv(file = "DATA/yield_data.csv")
+
+str(yield_data , give.attr = FALSE)
+
+yield_data <- yield_data %>% 
+  filter(!year %in% c( "2016" , "2018") & N_level_kgha != 275) #removing the years and  N rate to match with NDVI data
+
+yield_data <- yield_data %>% 
+  mutate(
+    site_year = factor(site_year),
+    year = factor(year),
+    Block = factor(Block),
+    MainPlot = factor(MainPlot),
+    exp_plot_number = factor(exp_plot_number),
+    N_level = factor(N_level),
+    SubPlot = factor(SubPlot),
+    TopDress = factor(TopDress),
+    SeasonalNRate_f = factor(SeasonalNRate),
+    N_level_kgha_f = factor(N_level_kgha),
+    TopDress_kgha_f = factor(TopDress_kgha),
+    SeasonalNRate_kgha_f = factor(SeasonalNRate_kgha)
+    ) #changes these columns to factor
+
+str(yield_data , give.attr = FALSE)
+
+yield_data <- yield_data %>% 
+  mutate(
+    FW1net = FW1PlusTare - tare,
+    FW2net = FW2PlusTare - tare,
+    TotalFW = FW1net + FW2net,
+    SSFWnet = SSFWPlusTare - tare,
+    Ratio = SSFWnet / TotalFW, 
+    SSODWnet = SSODW - HarvestBagPlusTie, 
+    SeedTray1 = SeedTray1.1 + SeedTray1.2, #adds the decimal to the 243g to get the tare weight for the seedtray
+    Grain3net = Grain3PlusSeedTray1 - SeedTray1, #subtract tare of seed tray from grain3. Grain3 is the reweighed sample value
+    Grain4net = Grain4PlusSeedTray2 - SeedTray2, #grain4 is the amount of grain removed for ballmilling. this value came from another excel sheet
+    Grain2net = Grain2PlusPaperBag2 - PaperBag2, #yield component grain sample
+    Grain2net = Grain2net * Ratio, #this essentially subsamples the yield component grain sample
+    GrainNet = Grain3net + Grain4net + Grain2net, #add the grain removed for ball milling and yield component back to the reweighed grain sample
+    GrainRing = GrainNet / Ratio, #the amount of grain in the entire m^2 ring in grams
+    GrainYield = GrainRing * 10, #g/m^2 to kg/ha
+    GrainYield_kgha = GrainYield * ((100-MoistureContentGrain3)/86),#corrects for 14% moisture based on the moisture content readings from grain reweighing. values came from another excel sheet
+    GrainYield_Mgha = GrainYield_kgha / 1000 , #converts kg/ha to Mg/ha
+    Grain5 = GrainRing * ((100-MoistureContentGrain3)/98.1), #grain in the ring if the subsample was at 1.9% moisture
+    Grain6 = GrainNet * ((100-MoistureContentGrain3)/98.1), #grain in the subsample if it was at 1.9% moisture
+    StrawSS = SSODWnet - Grain6 , #just straw in subsample in grams 
+    StrawRing = StrawSS / Ratio, #straw in ring in grams i.e g/m2
+    StrawNcon = StrawN / StrawSampleSize,
+    StrawNup = (StrawRing * StrawNcon) / 100, #straw Nup divide by 100 to convert mg/m2 to kg/ha - this is correct
+    GrainNcon = (GrainN / GrainSampleSize), #grain in ring in kg/ha
+    GrainNup = (Grain5 * GrainNcon) / 100, #grain Nup divide by 100 to convert mg N/m2 to kg N/ha
+    TotalSeasonalNup = StrawNup + GrainNup, #in kg/ha
+    HarvestIndex = Grain5 / (Grain5 + StrawRing),
+    Moisture = SSFWnet / SSODWnet
+    )
+
+boxplot(yield_data$GrainYield_Mgha)
+hist(yield_data$GrainYield_Mgha)
+
+boxplot(yield_data$HarvestIndex)
+hist(yield_data$HarvestIndex)
+
+boxplot(yield_data$Moisture)
+hist(yield_data$Moisture)
+
+yield_data_2 <- yield_data
+
+#the data looks good - don't see any unusual values
+
+yield_data <- dplyr::select(yield_data,
+                               site_year,
+                               year,
+                               Block,
+                               MainPlot,
+                               SubPlot,
+                               exp_plot_number,
+                               N_level_kgha,
+                               N_level_kgha_f,
+                               TopDress_kgha, 
+                               TopDress_kgha_f,
+                               GrainYield_Mgha
+                               )
+           
+
+paper2_data <- full_join(PI_data , yield_data)
+
+paper2_data <- dplyr::select(paper2_data,
+                               site_year,
+                               year,
+                               Block,
+                               MainPlot,
+                               SubPlot,
+                               exp_plot_number,
+                               N_level_kgha,
+                               N_level_kgha_f,
+                               TopDress_kgha, 
+                               TopDress_kgha_f,
+                               gs_NDVI,
+                               uas_NDVI,
+                               uas_NDRE,
+                               gs_NDVI_Sufficiency_Index,
+                               uas_NDVI_Sufficiency_Index,
+                               uas_NDRE_Sufficiency_Index,
+                               GrainYield_Mgha)
+
+```
+
+## Outlier Removal
+
+```{r}
+
+gs_ndvi_SI_mean <- mean(paper2_data$gs_NDVI_Sufficiency_Index)
+gs_ndvi_SI_sd <- sd(paper2_data$gs_NDVI_Sufficiency_Index)
+
+lower_limit <- gs_ndvi_SI_mean - (4*gs_ndvi_SI_sd) #lower limit for outlier removal. Observations that are 4 sd's away from mean. Observations less than 0.22 in GreenSeeker NDVI SI
+
+print(lower_limit)
+
+paper2_data_outliers <- paper2_data %>% 
+  filter(gs_NDVI_Sufficiency_Index <= lower_limit)
+
+paper2_data_OR <- paper2_data %>% 
+  filter(gs_NDVI_Sufficiency_Index >= lower_limit)
+
+```
+
+
+# TABLES S2-S4
+
+```{r}
+
+table_data_1 <- paper2_data_OR %>% 
+  dplyr::select(site_year , year , N_level_kgha , TopDress_kgha , gs_NDVI , uas_NDRE , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index) %>% 
+  filter(year == 2017 & TopDress_kgha == 0) #filters data to 2017 and 0 top-dress
+
+table_data_1 <- table_data_1 %>% 
+  dplyr::select(site_year , N_level_kgha , gs_NDVI , uas_NDRE , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index) %>% 
+  group_by(site_year , N_level_kgha) %>% 
+  summarise_all(list(min = min , max = max , mean = mean)) %>% 
+  dplyr::select(site_year , N_level_kgha , 
+                gs_NDVI_min , 
+                gs_NDVI_max , 
+                gs_NDVI_mean ,
+                gs_NDVI_Sufficiency_Index_min , 
+                gs_NDVI_Sufficiency_Index_max ,
+                gs_NDVI_Sufficiency_Index_mean ,
+                uas_NDRE_min ,
+                uas_NDRE_max ,
+                uas_NDRE_mean ,
+                uas_NDRE_Sufficiency_Index_min ,
+                uas_NDRE_Sufficiency_Index_max ,
+                uas_NDRE_Sufficiency_Index_mean
+                ) %>% 
+  ungroup() #takes the min max and mean of all the relevant columns
+
+table_data_1_nic <- table_data_1 %>% 
+  filter(site_year == "Nicolaus-17") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #filters nic-17 site and rounds to 2 places
+
+write_excel_csv(table_data_1_nic , "DATA/R_EXPORT/table_data_1_nic.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_1_wil <- table_data_1 %>% 
+  filter(site_year == "Williams-17") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #same as above, but for wil-17
+
+write_excel_csv(table_data_1_wil , "DATA/R_EXPORT/table_data_1_wil.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_1_2017_all <- table_data_1 %>% 
+  dplyr::select(-N_level_kgha) %>% 
+  group_by(site_year) %>% 
+  summarise_all(list(min = min , max = max , mean = mean)) %>%
+  ungroup() %>% 
+  dplyr::select(-site_year) %>%
+  mutate(across(everything(), round, 2)) %>% 
+  mutate(site_year = c("Nicolaus-17" , "Williams-17") , .before = gs_NDVI_min_min,
+         site_year = as.factor(site_year)) %>% 
+  dplyr::select(c(site_year,
+                  gs_NDVI_min_min , 
+                  gs_NDVI_max_max , 
+                  gs_NDVI_mean_mean , 
+                  gs_NDVI_Sufficiency_Index_min_min , 
+                  gs_NDVI_Sufficiency_Index_max_max , 
+                  gs_NDVI_Sufficiency_Index_mean_mean ,
+                  uas_NDRE_min_min , 
+                  uas_NDRE_max_max , 
+                  uas_NDRE_mean_mean ,
+                  uas_NDRE_Sufficiency_Index_min_min , 
+                  uas_NDRE_Sufficiency_Index_max_max , 
+                  uas_NDRE_Sufficiency_Index_mean_mean )) #gets min max and mean for the 2 2017 sites across all pre-plant N rates
+
+write_excel_csv(table_data_1_2017_all , "DATA/R_EXPORT/table_data_1_2017_all.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_2 <- paper2_data_OR %>% 
+  dplyr::select(site_year , year , N_level_kgha , TopDress_kgha , gs_NDVI , uas_NDRE , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index) %>% 
+  filter(year == 2019 & TopDress_kgha == 0) #filters data to 2019 and 0 top-dress
+
+table_data_2 <- table_data_2 %>% 
+  dplyr::select(site_year , N_level_kgha , gs_NDVI , uas_NDRE , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index) %>% 
+  group_by(site_year , N_level_kgha) %>% 
+  summarise_all(list(min = min , max = max , mean = mean)) %>% 
+  dplyr::select(site_year , N_level_kgha , 
+                gs_NDVI_min , 
+                gs_NDVI_max , 
+                gs_NDVI_mean ,
+                gs_NDVI_Sufficiency_Index_min , 
+                gs_NDVI_Sufficiency_Index_max ,
+                gs_NDVI_Sufficiency_Index_mean ,
+                uas_NDRE_min ,
+                uas_NDRE_max ,
+                uas_NDRE_mean ,
+                uas_NDRE_Sufficiency_Index_min ,
+                uas_NDRE_Sufficiency_Index_max ,
+                uas_NDRE_Sufficiency_Index_mean
+                ) %>% 
+  ungroup() #takes the min max and mean of all the relevant columns
+
+table_data_2_arb <- table_data_2 %>% 
+  filter(site_year == "Arbuckle-19") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #filters arb-19 site and rounds to 2 places
+
+write_excel_csv(table_data_2_arb , "DATA/R_EXPORT/table_2_data_Arbuckle19.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_2_dav <- table_data_2 %>% 
+  filter(site_year == "Davis-19") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #filters dav-19 site and rounds to 2 places
+
+write_excel_csv(table_data_2_dav , "DATA/R_EXPORT/table_2_data_Davis19.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_2_mry <- table_data_2 %>% 
+  filter(site_year == "Marysville-19") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #filters mry-19 site and rounds to 2 places
+
+write_excel_csv(table_data_2_mry , "DATA/R_EXPORT/table_2_data_Marysville19.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_2_res <- table_data_2 %>% 
+  filter(site_year == "RES-19") %>% 
+  dplyr::select(-site_year) %>% 
+  mutate(across(everything(), round, 2)) #filters res-19 site and rounds to 2 places
+
+write_excel_csv(table_data_2_res , "DATA/R_EXPORT/table_2_data_RES19.csv" ) #exports a excel csv to copy and paste values into word
+
+table_data_2_2019_all <- table_data_2 %>% 
+  dplyr::select(-N_level_kgha) %>% 
+  group_by(site_year) %>% 
+  summarise_all(list(min = min , max = max , mean = mean)) %>%
+  ungroup() %>% 
+  dplyr::select(-site_year) %>%
+  mutate(across(everything(), round, 2)) %>% 
+  mutate(site_year = c("Arbuckle-19" , "Davis-19" , "Marysville-19" , "RES-19") , .before = gs_NDVI_min_min,
+         site_year = as.factor(site_year)) %>% 
+  dplyr::select(c(site_year,
+                  gs_NDVI_min_min , 
+                  gs_NDVI_max_max , 
+                  gs_NDVI_mean_mean , 
+                  gs_NDVI_Sufficiency_Index_min_min , 
+                  gs_NDVI_Sufficiency_Index_max_max , 
+                  gs_NDVI_Sufficiency_Index_mean_mean ,
+                  uas_NDRE_min_min , 
+                  uas_NDRE_max_max , 
+                  uas_NDRE_mean_mean ,
+                  uas_NDRE_Sufficiency_Index_min_min , 
+                  uas_NDRE_Sufficiency_Index_max_max , 
+                  uas_NDRE_Sufficiency_Index_mean_mean )) #gets min max and mean for the 2019 sites across all pre-plant N rates
+
+write_excel_csv(table_data_2_2019_all , "DATA/R_EXPORT/table_2_data_ALL_2019_SITES.csv" ) #exports a excel csv to copy and paste values into word
+
+
+```
+
+# FIG 3
+
+## ALL SITES (Fig S2)
+
+### model
+
+```{r}
+
+paper2_data_OR_S1 <- paper2_data_OR %>% 
+  filter(TopDress_kgha == 0)
+
+lme.1 <- lme(GrainYield_Mgha ~ N_level_kgha + I(N_level_kgha^2),
+                  random = ~ N_level_kgha + I(N_level_kgha^2) | site_year,
+                  data = paper2_data_OR_S1,
+                  na.action = na.omit)
+
+summary(lme.1)
+
+car::Anova(lme.1, type = "3")
+
+MuMIn::r.squaredGLMM(lme.1)
+
+coefficients(lme.1)
+
+lme.1$coefficients$fixed
+
+xvals.lme.1 <- seq(0,250, by = 1)
+
+yvals.lme.1 <- (lme.1$coefficients$fixed[1] 
+                + lme.1$coefficients$fixed[2]*seq(0,250, by = 1) 
+                + lme.1$coefficients$fixed[3]*(seq(0,250, by = 1)^2))
+
+plot(yvals.lme.1 ~ xvals.lme.1, type = "l",
+     ylab = "grain yield (Mg/ha)",
+     xlab = "Pre-plant N rate (kg/ha)")
+
+lme.1.vertex <- xvals.lme.1[which(yvals.lme.1 == max(yvals.lme.1))]
+
+print(lme.1.vertex)
+
+abline(v = xvals.lme.1[which(yvals.lme.1 == max(yvals.lme.1))], col = "black")
+
+```
+
+### Results for Paper
+
+```{r}
+
+opt_N_rates_data <- paper2_data_OR_S1 %>% 
+  filter(N_level_kgha >= 165 & N_level_kgha <= 224) %>% 
+  dplyr::select(site_year, exp_plot_number , N_level_kgha , TopDress_kgha , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index)#filters data to optimal N rates based on the relationship develop below for figure 1
+
+min_gs_ndvi_opt_N <- min(opt_N_rates_data$gs_NDVI_Sufficiency_Index)
+
+round(print(min_gs_ndvi_opt_N) , digits = 2)
+
+max_gs_ndvi_opt_N <- max(opt_N_rates_data$gs_NDVI_Sufficiency_Index)
+
+round(print(max_gs_ndvi_opt_N) , digits = 2)
+
+min_uas_NDRE_opt_N <- min(opt_N_rates_data$uas_NDRE_Sufficiency_Index)
+
+round(print(min_uas_NDRE_opt_N) , digits = 2)
+
+max_uas_NDRE_opt_N <- max(opt_N_rates_data$uas_NDRE_Sufficiency_Index)
+
+round(print(max_uas_NDRE_opt_N) , digits = 2)
+
+
+```
+
+
+### diagnostics
+
+```{r}
+
+plot (lme.1)
+
+plot(resid(lme.1, type = "normalized") ~fitted(lme.1))
+
+lme.1_y <- resid(lme.1, type = "normalized")
+lme.1_x <- fitted(lme.1)
+
+lme.1resid_data <- data.frame(lme.1_x , lme.1_y)
+
+ggplot( data = lme.1resid_data , aes( x = lme.1_x , y = lme.1_y)) +
+  geom_point(mapping = aes(lme.1_x , lme.1_y) , data = lme.1resid_data)
+
+hist(resid(lme.1))
+
+
+plot(lme.1, site_year ~ resid(.), abline = 0)
+
+
+qqnorm(lme.1, abline = c(0,1) )
+
+
+qqnorm(resid(lme.1))
+qqline(resid(lme.1))
+
+
+qqnorm(lme.1 , ~resid(.) | site_year)
+
+plot(ranef(lme.1))
+
+pairs(lme.1 , id = 0.1) 
+
+qqnorm(lme.1 , ~ranef(.))
+
+plot( lme.1, resid(., type = "p") ~ fitted(.) | site_year,
+      id = 0.05, adj = -0.3 )
+
+```
+
+### emmeans
+
+```{r}
+
+mylist <- list(N_level_kgha = seq(0 , 250 , by = 1) ) #makes the list
+
+yield_emmeans <- as.data.frame(summary(emmeans(lme.1 , ~ N_level_kgha , at = mylist ))) #calculates the emmeans
+
+yield_emmeans <- yield_emmeans %>% 
+  rename(GrainYield_Mgha = emmean ) #renames the grain yield column
+
+```
+
+### plot
+
+```{r}
+
+FigS2 <- ggplot(data = paper2_data_OR_S1 , aes ( x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point(data = paper2_data_OR_S1 , aes ( x = N_level_kgha , y = GrainYield_Mgha , shape = site_year), size = 6) +
+  geom_line(data = yield_emmeans , aes( x = N_level_kgha , y = GrainYield_Mgha) , size = 3 , color = "blue") +
+  coord_cartesian(ylim = c(0 , 13) , xlim = c(0 , 252)) +
+  scale_x_continuous(breaks = seq(0 , 250 , by = 50)) +
+  scale_y_continuous(breaks = seq(0 , 13 , by = 2)) +
+  theme_classic() +
+  labs(x = "Pre-plant N Rate ( kg N ha"^-1~")" , y = "Grain Yield  ( Mg ha"^-1~")" , shape = "Site-Year") +
+  theme(axis.title = element_text(size = 44),
+        axis.text = element_text(size = 38),
+        legend.text = element_text(size = 26),
+        legend.title = element_text(size = 26 , hjust = 0.5),
+        legend.box.background = element_rect(size = 1)
+        ) +
+  annotate("text" , x = (lme.1.vertex - 5) , y = 4 , label = "200" , size = 12 , hjust = 1) +
+  geom_vline(xintercept = lme.1.vertex , linetype = "dashed" , size = 1.5) +
+  theme(legend.position = c(0.90 , 0.185)) +
+  scale_shape_manual(values = c(1:20))
+
+FigS2
+
+```
+
+## ALL SITES (Fig S2)
+
+```{r}
+
+ggsave("FIGURES/FigS2.pdf" , FigS2 , width = 17 , height = 12 , dpi = 10000)
+
+```
+
+## NICOLAUS-17
+
+```{r}
+
+fig1_data_nic17 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "Nicolaus-17") #filters to nic 17 site
+
+ggplot(fig1_data_nic17 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_nic17_mean <- fig1_data_nic17 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>% 
+  mutate(site_year = factor("Nicolaus-17")) %>% 
+  ungroup()
+
+ggplot(fig1_data_nic17_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_nic17_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+
+```{r}
+
+xvals.site.nic17 <- seq(0 , 250 , by = 1 )
+
+yvals.site.nic17 <- (coefficients(lme.1)[1,1] 
+                     + coefficients(lme.1)[1,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[1,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.nic17.vertex <- xvals.site.nic17[which(yvals.site.nic17 == max(yvals.site.nic17))]
+
+lm.nic17.df <- data.frame(xvals.site.nic17 , yvals.site.nic17) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+nic17_plot <- ggplot(fig1_data_nic17_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_nic17_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.nic17.df , aes(x = xvals.site.nic17 , 
+                                     y = yvals.site.nic17) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , 
+                  ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.y = element_text(size = 36) ,
+        axis.text.x = element_blank(),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "Nicolaus-17" , size = 10 , hjust = 0) +
+  annotate("text" , x = (lme.1.nic17.vertex + 5) , y = 6 , label = "168" , size = 10 , hjust = 0) +
+  geom_vline(xintercept = lme.1.nic17.vertex , linetype = "dashed" , size = 1.5)
+
+nic17_plot
+
+```
+
+## WILLIAMS-17
+
+```{r}
+
+fig1_data_wil17 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "Williams-17") #filters to wil 17 site
+
+ggplot(fig1_data_wil17 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_wil17_mean <- fig1_data_wil17 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>%
+  mutate(site_year = factor("Williams-17")) %>% 
+  ungroup()
+
+ggplot(fig1_data_wil17_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_wil17_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+
+```{r}
+
+xvals.site.wil17 <- seq(0 , 250 , by = 1 )
+
+yvals.site.wil17 <- (coefficients(lme.1)[2,1] 
+                     + coefficients(lme.1)[2,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[2,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.wil17.vertex <- xvals.site.wil17[which(yvals.site.wil17 == max(yvals.site.wil17))]
+
+print(lme.1.wil17.vertex)
+
+lm.wil17.df <- data.frame(xvals.site.wil17 , yvals.site.wil17) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+wil17_plot <- ggplot(fig1_data_wil17_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_wil17_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.wil17.df , aes(x = xvals.site.wil17 , 
+                                     y = yvals.site.wil17) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank() ,
+        axis.text.x = element_blank(),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "Williams-17" , size = 10 , hjust = 0) +
+  annotate("text" , x = (lme.1.wil17.vertex + 5) , y = 6 , label = "183" , size = 10 , hjust = 0) +
+  geom_vline(xintercept = lme.1.wil17.vertex , linetype = "dashed" , size = 1.5)
+
+wil17_plot
+
+```
+
+## ARBUCKLE-19
+```{r}
+
+fig1_data_arb19 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "Arbuckle-19") #filters to arb 19 site
+
+ggplot(fig1_data_arb19 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_arb19_mean <- fig1_data_arb19 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>% 
+  mutate(site_year = factor("Arbuckle-19")) %>% 
+  ungroup()
+
+ggplot(fig1_data_arb19_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_arb19_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+
+```{r}
+
+xvals.site.arb19 <- seq(0 , 250 , by = 1 )
+
+yvals.site.arb19 <- (coefficients(lme.1)[3,1] 
+                     + coefficients(lme.1)[3,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[3,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.arb19.vertex <- xvals.site.arb19[which(yvals.site.arb19 == max(yvals.site.arb19))]
+
+print(lme.1.arb19.vertex)
+
+lm.arb19.df <- data.frame(xvals.site.arb19 , yvals.site.arb19) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+arb19_plot <- ggplot(fig1_data_arb19_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_arb19_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.arb19.df , aes(x = xvals.site.arb19 , 
+                                     y = yvals.site.arb19) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank() ,
+        axis.text.x = element_blank(),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "Arbuckle-19" , size = 10 , hjust = 0) +
+  annotate("text" , x = (lme.1.arb19.vertex - 5) , y = 6 , label = "224" , size = 10 , hjust = 1) +
+  geom_vline(xintercept = lme.1.arb19.vertex , linetype = "dashed" , size = 1.5)
+
+arb19_plot
+
+```
+
+## MARYSVILLE-19
+
+```{r}
+
+fig1_data_mry19 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "Marysville-19") #filters to mry 19 site
+
+ggplot(fig1_data_mry19 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_mry19_mean <- fig1_data_mry19 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>% 
+  mutate(site_year = factor("Marysville-19")) %>% 
+  ungroup()
+
+ggplot(fig1_data_mry19_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_mry19_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+
+```{r}
+
+xvals.site.mry19 <- seq(0 , 250 , by = 1 )
+
+yvals.site.mry19 <- (coefficients(lme.1)[5,1] 
+                     + coefficients(lme.1)[5,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[5,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.mry19.vertex <- xvals.site.mry19[which(yvals.site.mry19 == max(yvals.site.mry19))]
+
+print(lme.1.mry19.vertex)
+
+lm.mry19.df <- data.frame(xvals.site.mry19 , yvals.site.mry19) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+mry19_plot <- ggplot(fig1_data_mry19_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_mry19_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.mry19.df , aes(x = xvals.site.mry19 , 
+                                     y = yvals.site.mry19) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank() ,
+        axis.text.x = element_text(size = 36),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "Marysville-19" , size = 10 , hjust = 0) +
+  annotate("text" , x = (lme.1.mry19.vertex + 5) , y = 6 , label = "192" , size = 10 , hjust = 0) +
+  geom_vline(xintercept = lme.1.mry19.vertex , linetype = "dashed" , size = 1.5)
+
+mry19_plot
+
+```
+
+## DAVIS-19
+
+```{r}
+
+fig1_data_dav19 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "Davis-19") #filters to dav 19 site
+
+ggplot(fig1_data_dav19 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_dav19_mean <- fig1_data_dav19 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>% 
+  mutate(site_year = factor("Davis-19")) %>% 
+  ungroup()
+
+ggplot(fig1_data_dav19_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_dav19_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+```{r}
+
+xvals.site.dav19 <- seq(0 , 250 , by = 1 )
+
+yvals.site.dav19 <- (coefficients(lme.1)[4,1] 
+                     + coefficients(lme.1)[4,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[4,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.dav19.vertex <- xvals.site.dav19[which(yvals.site.dav19 == max(yvals.site.dav19))]
+
+print(lme.1.dav19.vertex)
+
+lm.dav19.df <- data.frame(xvals.site.dav19 , yvals.site.dav19) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+dav19_plot <- ggplot(fig1_data_dav19_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_dav19_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.dav19.df , aes(x = xvals.site.dav19 , 
+                                     y = yvals.site.dav19) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.x = element_text(size = 36) ,
+        axis.text.y = element_text(size = 36),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "Davis-19" , size = 10 , hjust = 0)
+
+
+dav19_plot
+
+```
+
+## RES-19
+```{r}
+
+fig1_data_res19 <- paper2_data_OR_S1 %>% 
+  filter(site_year == "RES-19") #filters to res 19 site
+
+ggplot(fig1_data_res19 , aes(x = N_level_kgha , y = GrainYield_Mgha)) +
+  geom_point() #creates a plot
+
+fig1_data_res19_mean <- fig1_data_res19 %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(GrainYield_Mgha_mean = mean(GrainYield_Mgha) , GrainYield_Mgha_sd = sd(GrainYield_Mgha)) %>% 
+  mutate(site_year = factor("RES-19")) %>% 
+  ungroup()
+
+ggplot(fig1_data_res19_mean , aes(x = N_level_kgha , y = GrainYield_Mgha_mean)) +
+  geom_point() +
+  geom_errorbar(data = fig1_data_res19_mean , aes( y = GrainYield_Mgha_mean , ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , alpha = 1 , width = 2 , size = .25 , position = position_dodge(.6) , show.legend = F) #creates a plot
+
+```
+
+### data
+
+```{r}
+
+xvals.site.res19 <- seq(0 , 250 , by = 1 )
+
+yvals.site.res19 <- (coefficients(lme.1)[6,1] 
+                     + coefficients(lme.1)[6,2]*seq(0 , 250, by = 1) 
+                     + coefficients(lme.1)[6,3]*(seq(0 , 250, by = 1)^2))
+
+lme.1.res19.vertex <- xvals.site.res19[which(yvals.site.res19 == max(yvals.site.res19))]
+
+print(lme.1.res19.vertex)
+
+lm.res19.df <- data.frame(xvals.site.res19 , yvals.site.res19) #creates dataframe with N rate and fitted values
+
+```
+
+### plot
+
+```{r}
+
+res19_plot <- ggplot(fig1_data_res19_mean , 
+                     aes( x = N_level_kgha ,
+                          y = GrainYield_Mgha_mean)) + 
+  geom_point(aes( x = N_level_kgha ,
+                               y = GrainYield_Mgha_mean) , size = 3.5) +
+  geom_errorbar(data = fig1_data_res19_mean , aes( y = GrainYield_Mgha_mean , 
+                                              ymax = (GrainYield_Mgha_mean + GrainYield_Mgha_sd) , 
+                                              ymin = (GrainYield_Mgha_mean - GrainYield_Mgha_sd) ) , 
+                alpha = 1 , width = 5 , size = .5 , position = position_dodge(.6) , show.legend = F) +
+  geom_line(data = lm.res19.df , aes(x = xvals.site.res19 , 
+                                     y = yvals.site.res19) , 
+            color = "blue" , size = 1.5) +
+  coord_cartesian(xlim = c(0 , 235) , ylim = c(3 , 13)) +
+  scale_y_continuous(breaks = seq(2 , 13 , by = 2 )) +
+  theme_classic() + 
+  theme(axis.title = element_blank(),
+        axis.text.x = element_text(size = 36) ,
+        axis.text.y = element_blank(),
+        legend.position = "none" ) +
+  annotate("text" , x = 0 , y = 3 , label = "RES-19" , size = 10 , hjust = 0) +
+  annotate("text" , x = (lme.1.res19.vertex + 5) , y = 6 , label = "165" , size = 10 , hjust = 0) +
+  geom_vline(xintercept = lme.1.res19.vertex , linetype = "dashed" , size = 1.5)
+
+res19_plot
+
+```
+
+## Yield Results for Paper
+
+```{r}
+
+fig1_results <- rbind(fig1_data_nic17_mean,
+                      fig1_data_wil17_mean,
+                      fig1_data_arb19_mean,
+                      fig1_data_mry19_mean,
+                      fig1_data_dav19_mean,
+                      fig1_data_res19_mean)
+
+fig1_results$GrainYield_Mgha_mean <- round(fig1_results$GrainYield_Mgha_mean , digits = 1)
+
+fig1_results <- fig1_results %>% 
+  dplyr::select(-GrainYield_Mgha_sd)
+
+fig1_results_min <- fig1_results %>% 
+  group_by(site_year) %>% 
+  summarise(min = min(GrainYield_Mgha_mean)) %>% 
+  ungroup()
+
+fig1_results_max <- fig1_results %>% 
+  group_by(site_year) %>% 
+  summarise(max = max(GrainYield_Mgha_mean)) %>% 
+  ungroup()
+
+```
+
+
+# FIG 3
+
+```{r}
+
+Fig3 <- grid.arrange(arrangeGrob(
+                              nic17_plot,
+                              wil17_plot,
+                              arb19_plot,
+                              dav19_plot,
+                              mry19_plot,
+                              res19_plot,
+                              ncol = 3,
+                              nrow = 2,
+                              bottom = textGrob("Pre-plant N Rate ( kg N ha"^-1~")" ,
+                                                gp = gpar( fontsize = 40) ,
+                                                hjust = 0.5),
+                              left = textGrob("Grain Yield ( Mg ha"^-1~")" ,
+                                              gp = gpar(fontsize = 40) ,
+                                              rot = 90, 
+                                              vjust = 0.5))
+                                )
+                   
+
+ggsave("FIGURES/Fig3.pdf" , Fig3,  width = 22 , height = 12 , dpi = 10000)
+
+```
+
+
+# FIG 4
+
+```{r}
+
+fig2.data <- paper2_data_OR %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "TopDress_kgha"  , "GrainYield_Mgha" )
+
+```
+
+## NICOLAUS-17
+
+### data
+
+```{r}
+
+fig2.data.nic17 <- fig2.data %>% 
+  filter(site_year == "Nicolaus-17") #filter nic 17 site
+
+fig2.data.nic17 <- spread(data = fig2.data.nic17 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.nic17 <- fig2.data.nic17 %>%
+  rename(yield_0 = "0",
+         yield_25 = "25" ,
+         yield_50 = "50") %>% 
+  mutate(yield_resp_25 = yield_25 - yield_0,
+         yield_resp_50 = yield_50 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp_25" , "yield_resp_50") %>% 
+  mutate(yield_response_mean = (yield_resp_25 + yield_resp_50) / 2 ) %>% 
+  mutate(site_year = factor("Nicolaus-17")) %>% 
+  dplyr::select(-c("yield_resp_25" , "yield_resp_50"))#processes data.
+
+fig2.data.nic17 <- fig2.data.nic17 %>% 
+  group_by(site_year , N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_response_mean) , yield_response_sd = sd((yield_response_mean))) %>% 
+  ungroup()
+
+```
+
+### plot
+
+```{r}
+
+nic17.fig2.plot <- ggplot(data = fig2.data.nic17 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.nic17 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+theme(axis.title = element_blank(),
+        axis.text.y = element_text(size = 36) ,
+        axis.text.x = element_blank(),
+        legend.title = element_text(size = 22),
+        legend.text = element_text(size = 22),
+        legend.position = "none" ) +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "Nicolaus-17" , size = 10 , hjust = 0)
+
+nic17.fig2.plot
+
+```
+
+## WILLIAMS-17
+
+### data
+
+```{r}
+
+fig2.data.wil17 <- fig2.data %>% 
+  filter(site_year == "Williams-17") #filter nic 17 site
+
+fig2.data.wil17 <- spread(data = fig2.data.wil17 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.wil17 <- fig2.data.wil17 %>%
+  rename(yield_0 = "0",
+         yield_25 = "25" ,
+         yield_50 = "50") %>% 
+  mutate(yield_resp_25 = yield_25 - yield_0,
+         yield_resp_50 = yield_50 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp_25" , "yield_resp_50") %>% 
+  mutate(yield_response_mean = (yield_resp_25 + yield_resp_50) / 2 ) %>% 
+  mutate(site_year = factor("Williams-17")) %>% 
+  dplyr::select(-c("yield_resp_25" , "yield_resp_50"))#processes data.
+
+fig2.data.wil17 <- fig2.data.wil17 %>% 
+  group_by(site_year , N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_response_mean) , yield_response_sd = sd((yield_response_mean))) %>% 
+  ungroup()
+
+
+```
+
+### plot
+
+```{r}
+
+wil17.fig2.plot <- ggplot(data = fig2.data.wil17 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.wil17 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "none") +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "Williams-17" , size = 10 , hjust = 0)
+
+wil17.fig2.plot
+
+
+```
+
+### ARBUCKLE-19
+
+### data
+
+```{r}
+
+fig2.data.arb19 <- fig2.data %>% 
+  filter(site_year == "Arbuckle-19") #filter arb19 site
+
+fig2.data.arb19 <- spread(data = fig2.data.arb19 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.arb19 <- fig2.data.arb19 %>%
+  rename(yield_0 = "0",
+         yield_34 = "34" ) %>% 
+  mutate(yield_resp = yield_34 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp") %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_resp) , yield_response_sd = sd(yield_resp)) %>% 
+  mutate(site_year = factor("Arbuckle-19"))  #processes data.
+
+```
+
+### plot
+
+```{r}
+
+arb19.fig2.plot <- ggplot(data = fig2.data.arb19 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.arb19 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "none") +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "Arbuckle-19" , size = 10 , hjust = 0)
+
+arb19.fig2.plot
+
+```
+
+### MARYSVILLE-19
+
+### data
+
+```{r}
+
+fig2.data.mry19 <- fig2.data %>% 
+  filter(site_year == "Marysville-19") #filter mry19 site
+
+fig2.data.mry19 <- spread(data = fig2.data.mry19 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.mry19 <- fig2.data.mry19 %>%
+  rename(yield_0 = "0",
+         yield_34 = "34" ) %>% 
+  mutate(yield_resp = yield_34 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp") %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_resp) , yield_response_sd = sd(yield_resp)) %>% 
+  mutate(site_year = factor("Marysville-19"))  #processes data.
+
+```
+
+### plot
+
+```{r}
+
+mry19.fig2.plot <- ggplot(data = fig2.data.mry19 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.mry19 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+theme(axis.title = element_blank(),
+        axis.text.y = element_blank() ,
+        axis.text.x = element_text(size = 36),
+        legend.position = "none" ) +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "Marysville-19" , size = 10 , hjust = 0)
+
+mry19.fig2.plot
+
+```
+
+### DAVIS-19
+
+### data
+
+```{r}
+
+fig2.data.dav19 <- fig2.data %>% 
+  filter(site_year == "Davis-19") #filter dav19 site
+
+fig2.data.dav19 <- spread(data = fig2.data.dav19 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.dav19 <- fig2.data.dav19 %>%
+  rename(yield_0 = "0",
+         yield_34 = "34" ) %>% 
+  mutate(yield_resp = yield_34 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp") %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_resp) , yield_response_sd = sd(yield_resp)) %>% 
+  mutate(site_year = factor("Davis-19"))  #processes data.
+
+```
+
+### plot
+
+```{r}
+
+dav19.fig2.plot <- ggplot(data = fig2.data.dav19 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.dav19 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_text(size = 36) ,
+        axis.text.y = element_text(size = 36),
+        legend.position = "none" ) +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "Davis-19" , size = 10 , hjust = 0)
+
+dav19.fig2.plot
+
+```
+
+### RES-19
+
+### data
+
+```{r}
+
+fig2.data.res19 <- fig2.data %>% 
+  filter(site_year == "RES-19") #filter res19 site
+
+fig2.data.res19 <- spread(data = fig2.data.res19 , key = TopDress_kgha , value = GrainYield_Mgha) #spread data
+
+fig2.data.res19 <- fig2.data.res19 %>%
+  rename(yield_0 = "0",
+         yield_34 = "34" ) %>% 
+  mutate(yield_resp = yield_34 - yield_0) %>% 
+  dplyr::select("site_year" , "exp_plot_number", "N_level_kgha"  , "yield_resp") %>% 
+  group_by(N_level_kgha) %>% 
+  summarise(yield_response = mean(yield_resp) , yield_response_sd = sd(yield_resp)) %>% 
+  mutate(site_year = factor("RES-19"))  #processes data.
+
+```
+
+### plot
+
+```{r}
+
+res19.fig2.plot <- ggplot(data = fig2.data.res19 , aes ( x = N_level_kgha  , y = yield_response , fill = N_level_kgha)) +
+  geom_bar(position = "dodge" , stat = "identity" , fill = "dodgerblue3" , width = 25) +
+  geom_errorbar( data = fig2.data.res19 , aes( y = yield_response , ymax = (yield_response + yield_response_sd) , ymin = (yield_response - yield_response_sd) ) , alpha = 1 , width = 10 , size = .5 , position = position_dodge(1)) +
+  theme_classic() +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_text(size = 36) ,
+        axis.text.y = element_blank(),
+        legend.position = "none" ) +
+  geom_hline(yintercept = 0) +
+  coord_cartesian( xlim = c (-10 , 235) , ylim = c(-2 , 4)) +
+  scale_y_continuous(breaks = seq(-2 , 4 , by = 1 )) +
+  labs(fill = "Pre-plant N \nRate (kg N ha"^-1~")") +
+  annotate("text" , x = 0 , y = 4 , label = "RES-19" , size = 10 , hjust = 0)
+
+res19.fig2.plot
+
+```
+
+
+# FIG 4
+
+```{r}
+
+Fig4 <- grid.arrange(arrangeGrob(
+                              nic17.fig2.plot,
+                              wil17.fig2.plot,
+                              arb19.fig2.plot,
+                              dav19.fig2.plot,
+                              mry19.fig2.plot,
+                              res19.fig2.plot,
+                              ncol = 3,
+                              nrow = 2,
+                              bottom = textGrob("Pre-plant N Rate ( kg N ha"^-1~")" ,
+                                                gp = gpar( fontsize = 40) ,
+                                                hjust = 0.5),
+                              left = textGrob("Grain Yield Response ( Mg ha"^-1~")" ,
+                                              gp = gpar(fontsize = 40) ,
+                                              rot = 90, 
+                                              vjust = 0.5))
+                                )
+                   
+
+ggsave("FIGURES/Fig4.pdf" , Fig4,  width = 22 , height = 12 , dpi = 10000)
+
+```
+
+# FIG 5
+
+## models
+
+### gs NDVI
+
+```{r}
+
+fig3.lm.gsndvi <- lme(gs_NDVI_Sufficiency_Index ~ N_level_kgha + I(N_level_kgha^2),
+                   random = ~N_level_kgha + I(N_level_kgha^2)|site_year,
+                   data= paper2_data_OR_S1,
+                   na.action = na.omit) #creates mixed model
+
+summary(fig3.lm.gsndvi) # summary of model
+
+car::Anova(fig3.lm.gsndvi, type = "3")
+
+MuMIn::r.squaredGLMM(fig3.lm.gsndvi)
+
+coefficients(fig3.lm.gsndvi)
+
+fig3.lm.gsndvi$coefficients$fixed
+
+xvals.fig3.lm.gsndvi <- seq(0,250, by = 1)
+
+yvals.fig3.lm.gsndvi <- (fig3.lm.gsndvi$coefficients$fixed[1]
+                         + fig3.lm.gsndvi$coefficients$fixed[2]*seq(0,250, by = 1)
+                         + fig3.lm.gsndvi$coefficients$fixed[3]*(seq(0,250, by = 1)^2))
+
+h.fig3.lm.gsndvi <- xvals.fig3.lm.gsndvi[which(yvals.fig3.lm.gsndvi == max(yvals.fig3.lm.gsndvi))]
+
+mylist <- list(N_level_kgha = seq(0 , 250 , by = 1) ) #makes the list
+
+fig3.lm.gsndvi.df <- as.data.frame(summary(emmeans(fig3.lm.gsndvi , ~ N_level_kgha , at = mylist ))) #calculates the emmeans
+
+colnames(fig3.lm.gsndvi.df)
+
+fig3.lm.gsndvi.df <- fig3.lm.gsndvi.df %>% 
+  rename(N_rate = N_level_kgha,
+         Fit = emmean) %>% 
+  mutate(Index = "gs_NDVI")
+
+max_opt_N <- list(N_level_kgha = 215) #makes the list
+max_opt_SI <- emmeans(fig3.lm.gsndvi , ~ N_level_kgha , at = max_opt_N ) #calculates the emmeans SI for opt N rate
+max_opt_SI
+
+
+```
+
+### uas NDRE
+
+```{r}
+
+fig3.lm.uasndre <- lme(uas_NDRE_Sufficiency_Index ~ N_level_kgha + I(N_level_kgha^2),
+                   random = ~N_level_kgha + I(N_level_kgha^2)|site_year,
+                   data= paper2_data_OR_S1,
+                   na.action = na.omit) #creates mixed model
+
+summary(fig3.lm.uasndre) # summary of model
+
+car::Anova(fig3.lm.uasndre, type = "3")
+
+MuMIn::r.squaredGLMM(fig3.lm.uasndre)
+
+coefficients(fig3.lm.uasndre)
+
+fig3.lm.uasndre$coefficients$fixed
+
+xvals.fig3.lm.uasndre <- seq(0,250, by = 1)
+
+yvals.fig3.lm.uasndre <- (fig3.lm.uasndre$coefficients$fixed[1]
+                         + fig3.lm.uasndre$coefficients$fixed[2]*seq(0,250, by = 1)
+                         + fig3.lm.uasndre$coefficients$fixed[3]*(seq(0,250, by = 1)^2))
+
+h.fig3.lm.uasndre <- xvals.fig3.lm.uasndre[which(yvals.fig3.lm.uasndre == max(yvals.fig3.lm.uasndre))]
+
+mylist <- list(N_level_kgha = seq(0 , 250 , by = 1) ) #makes the list
+
+fig3.lm.uasndre.df <- as.data.frame(summary(emmeans(fig3.lm.uasndre , ~ N_level_kgha , at = mylist ))) #calculates the emmeans
+
+colnames(fig3.lm.uasndre.df)
+
+fig3.lm.uasndre.df <- fig3.lm.uasndre.df %>% 
+  rename(N_rate = N_level_kgha,
+         Fit = emmean) %>% 
+  mutate(Index = "uas_NDRE")
+
+
+max_opt_N <- list(N_level_kgha = 240) #makes the list
+max_opt_SI <- emmeans(fig3.lm.uasndre , ~ N_level_kgha , at = max_opt_N ) #calculates the emmeans for max opt N rate
+max_opt_SI
+
+new_fig3_data <- rbind(fig3.lm.gsndvi.df,
+                       fig3.lm.uasndre.df)
+
+new_fig3_data_ndvi <- paper2_data_OR_S1 %>% 
+  dplyr::select(N_level_kgha , gs_NDVI_Sufficiency_Index) %>% 
+  rename(N_rate = N_level_kgha ,
+         SI = gs_NDVI_Sufficiency_Index) %>% 
+  mutate(Index = "gs_NDVI" )
+
+new_fig3_data_ndre <- paper2_data_OR_S1 %>% 
+  dplyr::select(N_level_kgha , uas_NDRE_Sufficiency_Index) %>% 
+  rename(N_rate = N_level_kgha ,
+         SI = uas_NDRE_Sufficiency_Index) %>% 
+  mutate(Index = "uas_NDRE" )
+
+new_fig3_data_2 <- rbind(new_fig3_data_ndvi,
+                         new_fig3_data_ndre)
+
+```
+
+# FIG 5
+
+```{r}
+
+Fig5 <- ggplot(data = new_fig3_data_2 , aes ( x = N_rate , y = SI)) +
+  geom_point(data = new_fig3_data_2 , aes ( x = N_rate , y = SI , shape = Index , fill = Index , color = Index, alpha = Index , size = Index) ) +
+  geom_line(data = new_fig3_data , aes( x = N_rate , y = Fit , color = Index , linetype = Index) , size = 3.5) +
+  coord_cartesian(ylim = c(0 , 1.05) , xlim = c(0 , 252)) +
+  scale_x_continuous(breaks = seq(0 , 250 , by = 50)) +
+  scale_y_continuous(breaks = seq(0 , 1 , by = .2)) +
+  theme_classic() +
+  labs(x = "Pre-plant N Rate ( kg N ha"^-1~")" , y = "Sufficiency-Index" , shape = "Index" , color = "Index" , fill = "Index" , alpha = "Index" , linetype = "Index") +
+  guides(color = guide_legend(keywidth = 12 , keyheight = 1.5 , unit = "cm" , title.hjust = 0.5 , byrow = TRUE),
+         shape = guide_legend(keywidth = 12 , keyheight = 1.5 , unit = "cm" , title.hjust = 0.5 , byrow = TRUE),
+         fill = guide_legend(keywidth = 12 , keyheight = 1.5 , unit = "cm" , title.hjust = 0.5 , byrow = TRUE),
+         alpha = guide_legend(keywidth = 12 , keyheight = 1.5 , unit = "cm" , title.hjust = 0.5 , byrow = TRUE),
+         linetype = guide_legend(keywidth = 12 , keyheight = 1.5 , unit = "cm" , title.hjust = 0.5 , byrow = TRUE)) +
+  theme(axis.title = element_text(size = 46),
+        axis.text = element_text(size = 40),
+        legend.text = element_text(size = 32),
+        legend.title = element_text(size = 32 , hjust = 0.5),
+        legend.text.align = 0,
+        legend.box.background = element_rect(size = 1),
+        legend.position = c(0.40 , 0.15 )) +
+  geom_vline(xintercept = h.fig3.lm.gsndvi , linetype = "dashed" , size = 2.5 , color = "grey20") +
+  geom_vline(xintercept = h.fig3.lm.uasndre , linetype = "solid" , size = 2.5 , color = "gray10") +
+  geom_vline(xintercept = 200 , linetype = "dotted" , size = 2.5 , color = "black") +
+  scale_linetype_manual("Index" , breaks = c(  "uas_NDRE" , "gs_NDVI"   ) , values = c( "solid", "dashed" ) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+  scale_shape_manual("Index" , breaks = c( "uas_NDRE" , "gs_NDVI"   ) , values = c( 1 , 4  ) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+  scale_color_manual("Index" , breaks = c(     "uas_NDRE" , "gs_NDVI"  ) , values = c( "grey10" ,  "grey20" ) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+  scale_fill_manual("Index" , breaks = c(    "uas_NDRE" ,  "gs_NDVI"    ) , values = c( "white"  ,  "white") , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+scale_alpha_manual("Index" , breaks = c(    "uas_NDRE" , "gs_NDVI"   ) , values = c( 1 ,  1 ) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS])  )) +
+  scale_size_manual("Index" , breaks = c(  "uas_NDRE"  , "gs_NDVI"  ) , values = c( 9 ,  9 ) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+  annotate("text" , x = (h.fig3.lm.gsndvi + 8.5) , y = 0.5 , label = "215" , size = 11 , color = "grey10" , parse = T) +
+  annotate("text" , x = (h.fig3.lm.uasndre + 9.5) , y = 0.5 , label = "240" , size = 11 , color = "gray20" , parse = T) +
+  annotate("text" , x = (200 - 9.5) , y = 0.5 , label = "200" , size = 11 , color = "black" , parse = T)
+
+Fig5
+
+ggsave("FIGURES/Fig5.pdf" , Fig5 , width = 17 , height = 12 ,  dpi = 10000)
+
+```
+
+# FIG 6 - MODELS
+
+## GS NDVI
+
+### model
+
+```{r}
+
+ctrl <- lmeControl(opt = "optim") #changes control to "optimal" settings
+
+gs_ndvi_model <- lme(GrainYield_Mgha ~ gs_NDVI_Sufficiency_Index * TopDress_kgha   ,
+             control = ctrl ,
+             random = ~ I(TopDress_kgha) | site_year  , 
+             data = paper2_data_OR)
+
+summary(gs_ndvi_model)
+
+summary(gs_ndvi_model)$tTable
+
+Anova(gs_ndvi_model , type = 3)
+
+r.squaredGLMM(gs_ndvi_model)
+
+r_sq <- r.squaredGLMM(gs_ndvi_model) 
+
+r_sq_fixed <- round(r_sq[1] , digits = 2)
+r_sq_fixed
+
+r_sq_total <- round(r_sq[2] , digits = 2)
+r_sq_total
+
+r_sq_random <- r_sq_total - r_sq_fixed
+r_sq_random
+
+```
+
+### diagnostics
+
+```{r}
+
+plot (gs_ndvi_model)
+
+plot(resid(gs_ndvi_model, type = "normalized") ~fitted(gs_ndvi_model))
+
+gs_ndvi_model_y <- resid(gs_ndvi_model, type = "normalized")
+gs_ndvi_model_x <- fitted(gs_ndvi_model)
+
+gs_ndvi_modelresid_data <- data.frame(gs_ndvi_model_x , gs_ndvi_model_y)
+
+ggplot( data = gs_ndvi_modelresid_data , aes( x = gs_ndvi_model_x , y = gs_ndvi_model_y)) +
+  geom_point(mapping = aes(gs_ndvi_model_x , gs_ndvi_model_y) , data = gs_ndvi_modelresid_data)
+
+hist(resid(gs_ndvi_model))
+
+
+plot(gs_ndvi_model, site_year ~ resid(.), abline = 0)
+
+
+qqnorm(gs_ndvi_model, abline = c(0,1) )
+
+
+qqnorm(resid(gs_ndvi_model))
+qqline(resid(gs_ndvi_model))
+
+
+qqnorm(gs_ndvi_model , ~resid(.) | site_year)
+
+plot(ranef(gs_ndvi_model))
+
+pairs(gs_ndvi_model , id = 0.1) 
+
+qqnorm(gs_ndvi_model , ~ranef(.))
+
+plot( gs_ndvi_model, resid(., type = "p") ~ fitted(.) | site_year,
+      id = 0.05, adj = -0.3 )
+
+```
+
+### emmeans
+
+```{r}
+
+mylist <- list(gs_NDVI_Sufficiency_Index=seq(round(min(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2) , round(max(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2) , by = .001) ,TopDress_kgha =c( 34 , 0))
+
+gs_ndvi_emmeans <- emmeans(gs_ndvi_model, ~TopDress_kgha * gs_NDVI_Sufficiency_Index , at = mylist )
+
+gs_ndvi_emmeans_contrast <- as.data.frame(summary(contrast(gs_ndvi_emmeans , "pairwise" , side = ">" , by = "gs_NDVI_Sufficiency_Index"))[1:7])
+
+gs_ndvi_emmeans_contrast <- gs_ndvi_emmeans_contrast %>% 
+  mutate(prob_postive_resp = (1 - p.value) *100) #calculates probability of positive yield response
+
+gs_ndvi_emmeans_contrast$prob_postive_resp <- round(gs_ndvi_emmeans_contrast$prob_postive_resp , digits = 2) #round prob to 2 decimal places
+
+gs_ndvi_emmeans_contrast <- gs_ndvi_emmeans_contrast %>% 
+  mutate(t_score = abs((estimate - 0.30)) / SE) #calculates t-score of response being greater than 0.30 Mg ha
+
+gs_ndvi_emmeans_contrast <- gs_ndvi_emmeans_contrast %>% 
+  mutate(prob_economical_resp = if_else(estimate < 0.30 , pt(q = t_score , df = df , lower.tail = F) , pt(q = t_score , df = df , lower.tail = T)))  #calculates probability of economical yield response
+
+gs_ndvi_emmeans_contrast$prob_economical_resp <- gs_ndvi_emmeans_contrast$prob_economical_resp * 100 # reports prob as %
+
+gs_ndvi_emmeans_contrast$prob_economical_resp <- round(gs_ndvi_emmeans_contrast$prob_economical_resp, digits = 2) #round prob to 2 decimal places
+
+gs_ndvi_emmeans_contrast <- gs_ndvi_emmeans_contrast %>% 
+  mutate(Yield_Response = round(estimate , digits = 2),
+         Standard_Error = round(SE , digits = 2)) #round yield response to 2 decimal places and renames column
+
+gs_ndvi_emmeans_contrast <- gs_ndvi_emmeans_contrast %>% 
+  mutate(gs_NDVI_Sufficiency_Index_r = round(gs_NDVI_Sufficiency_Index , digits = 2)) %>% 
+  dplyr::select(-t_score) #new column with NDVI SI rounded to 2 digits and removes t score column
+
+gs_ndvi_rise <-  max(gs_ndvi_emmeans_contrast$estimate) - min(gs_ndvi_emmeans_contrast$estimate)
+
+gs_ndvi_run <- round(min(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2) - round(max(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2)
+
+gs_ndvi_slope <- gs_ndvi_rise / gs_ndvi_run
+
+gs_ndvi_slope #slope per 1 unit SI. Need to divide by 10 to get slope for every 0.1 unit of SI.
+
+gs_ndvi_slope <- round((gs_ndvi_slope / 10) , digits = 2)
+
+gs_ndvi_slope
+
+gs_ndvi_mean_se <- gs_ndvi_emmeans_contrast %>% 
+  dplyr::select(SE) %>% 
+  summarise(mean_se = mean(SE))
+
+gs_ndvi_mean_se$mean_se <- round(gs_ndvi_mean_se$mean_se , digits = 2)
+
+gs_ndvi_mean_se$mean_se
+
+```
+
+## UAS NDRE
+
+### model
+
+```{r}
+
+UAS_ndre_model <- lme(GrainYield_Mgha ~ uas_NDRE_Sufficiency_Index * TopDress_kgha,
+             control = ctrl ,
+             random = ~ I(TopDress_kgha) | site_year  , 
+             data = paper2_data_OR)
+
+summary(UAS_ndre_model)
+
+summary(UAS_ndre_model)$tTable
+
+Anova(UAS_ndre_model , type = 3)
+
+r.squaredGLMM(UAS_ndre_model)
+
+r_sq <- r.squaredGLMM(UAS_ndre_model) 
+
+r_sq_fixed <- round(r_sq[1] , digits = 2)
+r_sq_fixed
+
+r_sq_total <- round(r_sq[2] , digits = 2)
+r_sq_total
+
+r_sq_random <- r_sq_total - r_sq_fixed
+r_sq_random
+
+```
+
+### diagnostics
+
+```{r}
+
+plot (UAS_ndre_model)
+
+plot(resid(UAS_ndre_model, type = "normalized") ~fitted(UAS_ndre_model))
+
+UAS_ndre_model_y <- resid(UAS_ndre_model, type = "normalized")
+UAS_ndre_model_x <- fitted(UAS_ndre_model)
+
+UAS_ndre_modelresid_data <- data.frame(UAS_ndre_model_x , UAS_ndre_model_y)
+
+ggplot( data = UAS_ndre_modelresid_data , aes( x = UAS_ndre_model_x , y = UAS_ndre_model_y)) +
+  geom_point(mapping = aes(UAS_ndre_model_x , UAS_ndre_model_y) , data = UAS_ndre_modelresid_data)
+
+hist(resid(UAS_ndre_model))
+
+
+plot(UAS_ndre_model, site_year ~ resid(.), abline = 0)
+
+
+qqnorm(UAS_ndre_model, abline = c(0,1) )
+
+
+qqnorm(resid(UAS_ndre_model))
+qqline(resid(UAS_ndre_model))
+
+
+qqnorm(UAS_ndre_model , ~resid(.) | site_year)
+
+plot(ranef(UAS_ndre_model))
+
+pairs(UAS_ndre_model , id = 0.1) 
+
+qqnorm(UAS_ndre_model , ~ranef(.))
+
+plot( UAS_ndre_model, resid(., type = "p") ~ fitted(.) | site_year,
+      id = 0.05, adj = -0.3 )
+
+```
+
+### emmeans
+
+```{r}
+
+mylist <- list(uas_NDRE_Sufficiency_Index=seq(round(min(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2) , round(max(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2) , by = .001),TopDress_kgha =c( 34 , 0)) #makes the list
+
+UAS_ndre_emmeans <- emmeans(UAS_ndre_model , ~TopDress_kgha * uas_NDRE_Sufficiency_Index , at = mylist ) #calculates the emmeans
+
+UAS_ndre_emmeans_contrast <- as.data.frame(summary(contrast(UAS_ndre_emmeans , "pairwise" , side = ">" , by = "uas_NDRE_Sufficiency_Index"))[1:7]) #puts emmeans in data frame with contrast of 0 to 34 kg N ha top-dress
+
+UAS_ndre_emmeans_contrast <- UAS_ndre_emmeans_contrast %>% 
+  mutate(prob_postive_resp = (1 - p.value) *100) #calculates probability of positive yield response
+
+UAS_ndre_emmeans_contrast$prob_postive_resp <- round(UAS_ndre_emmeans_contrast$prob_postive_resp , digits = 2) #round prob to 2 decimal places
+
+UAS_ndre_emmeans_contrast <- UAS_ndre_emmeans_contrast %>% 
+  mutate(t_score = abs((estimate - 0.30)) / SE) #calculates t-score of response being greater than 0.30 Mg ha
+
+UAS_ndre_emmeans_contrast <- UAS_ndre_emmeans_contrast %>% 
+  mutate(prob_economical_resp = if_else(estimate < 0.30 , pt(q = t_score , df = df , lower.tail = F) , pt(q = t_score , df = df , lower.tail = T))) #calculates probability of economical yield response
+
+UAS_ndre_emmeans_contrast$prob_economical_resp <- UAS_ndre_emmeans_contrast$prob_economical_resp * 100 # reports prob as %
+
+UAS_ndre_emmeans_contrast$prob_economical_resp <- round(UAS_ndre_emmeans_contrast$prob_economical_resp, digits = 2) #round prob to 2 decimal places
+
+UAS_ndre_emmeans_contrast <- UAS_ndre_emmeans_contrast %>% 
+  mutate(Yield_Response = round(estimate , digits = 2),
+         Standard_Error = round(SE , digits = 2)) #round yield response to 2 decimal places and renames column
+
+UAS_ndre_emmeans_contrast <- UAS_ndre_emmeans_contrast %>% 
+  mutate(uas_NDRE_Sufficiency_Index_r = round(uas_NDRE_Sufficiency_Index , digits = 2)) %>% 
+  dplyr::select(-t_score) #new column with NDRE SI rounded to 2 digits and removes t score column
+
+UAS_ndre_rise <-  max(UAS_ndre_emmeans_contrast$estimate) - min(UAS_ndre_emmeans_contrast$estimate)
+
+UAS_ndre_run <- round(min(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2) - round(max(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2)
+
+UAS_ndre_slope <- UAS_ndre_rise / UAS_ndre_run
+
+UAS_ndre_slope #slope per 1 unit SI. Need to divide by 10 to get slope for every 0.1 unit of SI.
+
+UAS_ndre_slope <- round((UAS_ndre_slope / 10) , digits = 2)
+
+UAS_ndre_slope
+
+UAS_ndre_mean_se <- UAS_ndre_emmeans_contrast %>% 
+  dplyr::select(SE) %>% 
+  summarise(mean_se = mean(SE))
+
+UAS_ndre_mean_se$mean_se <- round(UAS_ndre_mean_se$mean_se , digits = 2)
+
+UAS_ndre_mean_se$mean_se
+
+```
+
+# FIG 6 - PLOTS
+
+
+## Results for Paper
+
+```{r}
+
+test <- paper2_data_OR %>% 
+  filter(N_level_kgha >= 150 & N_level_kgha <= 200 & TopDress_kgha == 0) %>% 
+  dplyr::select(site_year , exp_plot_number , N_level_kgha , TopDress_kgha , gs_NDVI_Sufficiency_Index , uas_NDRE_Sufficiency_Index)
+
+print(min(test$gs_NDVI_Sufficiency_Index))
+print(max(test$gs_NDVI_Sufficiency_Index))
+
+print(min(test$uas_NDRE_Sufficiency_Index))
+print(max(test$uas_NDRE_Sufficiency_Index))
+
+round(print(sum(test$gs_NDVI_Sufficiency_Index > 0.70 & test$gs_NDVI_Sufficiency_Index < 1) / length(test$gs_NDVI_Sufficiency_Index) * 100 ) , digits = 0)
+
+round(print(sum(test$uas_NDRE_Sufficiency_Index > 0.70 & test$uas_NDRE_Sufficiency_Index < 1) / length(test$uas_NDRE_Sufficiency_Index) * 100 ) , digits = 0)
+
+```
+
+### GS NDVI
+
+```{r}
+
+mylist <- list(gs_NDVI_Sufficiency_Index = seq( 0.7 , 1 , by = 0.1 ) , TopDress_kgha = c(34 , 0))
+
+benefit_gs_ndvi <- emmeans(gs_ndvi_model , ~TopDress_kgha*gs_NDVI_Sufficiency_Index , at=mylist)
+
+benefit_gs_ndvi <- as.data.frame(summary(contrast(benefit_gs_ndvi , "pairwise" , side = ">" , by = "gs_NDVI_Sufficiency_Index"))[1:7])
+
+benefit_gs_ndvi <- benefit_gs_ndvi %>% 
+  mutate(Platform = factor("NDVI[GS]"),
+         Sufficiency_Index = factor(round(gs_NDVI_Sufficiency_Index , digits = 3)) ,
+         Yield_Mg = round(estimate , digits = 3),
+         SE_Mg = round(SE , digits = 3),
+         Probability = round(((1 - p.value)*100), digits = 2))
+
+benefit_gs_ndvi <- benefit_gs_ndvi %>%
+  dplyr::select(Platform , Yield_Mg , SE_Mg , Sufficiency_Index , Probability)
+  
+```
+
+### UAS NDRE
+
+```{r}
+
+mylist <- list(uas_NDRE_Sufficiency_Index = seq( 0.7 , 1 , by = 0.1 ) , TopDress_kgha = c(34 , 0))
+
+benefit_uas_NDRE <- emmeans(UAS_ndre_model,  ~TopDress_kgha | uas_NDRE_Sufficiency_Index , at = mylist)
+
+benefit_uas_NDRE <- as.data.frame(summary(contrast(benefit_uas_NDRE , "pairwise" , side = ">" , by = "uas_NDRE_Sufficiency_Index"))[1:7])
+
+
+benefit_uas_NDRE <- benefit_uas_NDRE %>% 
+  mutate(Platform = factor("NDRE[UAS]"),
+         Sufficiency_Index = factor(round(uas_NDRE_Sufficiency_Index , digits = 3)) ,
+         Yield_Mg = round(estimate , digits = 3),
+         SE_Mg = round(SE , digits = 3) ,
+         Probability = round(((1 - p.value)*100), digits = 2))
+
+benefit_uas_NDRE <- benefit_uas_NDRE %>%
+  dplyr::select(Platform , Yield_Mg , SE_Mg , Sufficiency_Index , Probability )
+  
+```
+
+### W/O SI
+
+```{r}
+
+mylist <- list(gs_NDVI_Sufficiency_Index = seq( 0.7 , 1.0 , by = 0.1 ) , TopDress_kgha = c(34 , 0))
+
+benefit_without_si <- emmeans(gs_ndvi_model , ~TopDress_kgha , at = mylist)
+
+benefit_without_si <- as.data.frame(summary(contrast(benefit_without_si , "pairwise" , side = ">" )))
+
+benefit_without_si <- benefit_without_si %>% 
+  mutate(Platform = factor( "Without SI" ) ,
+         Yield_Mg = round(estimate , digits = 2),
+         SE_Mg = round(SE , digits = 2),
+         Sufficiency_Index = factor(0) ,
+         Probability = round(((1 - p.value)*100), digits = 2)) %>% 
+  dplyr::select(Platform , Yield_Mg , SE_Mg , Sufficiency_Index , Probability)
+
+print(benefit_without_si$Yield_Mg)
+print(benefit_without_si$SE_Mg)
+
+benefit_data1 <- rbind(benefit_gs_ndvi , benefit_uas_NDRE , benefit_without_si)
+benefit_data2 <- rbind( benefit_uas_NDRE , benefit_gs_ndvi  )
+
+benefit_data2 <- benefit_data2 %>% 
+  mutate(Yield_Mg_round = round(Yield_Mg , digits = 2),
+         SE_Mg = round(SE_Mg , digits = 2)) %>% 
+  dplyr::select(Platform , Yield_Mg , Yield_Mg_round , SE_Mg , Sufficiency_Index , Probability)
+
+```
+
+## Results for Paper
+
+```{r}
+
+benefit_data3 <- benefit_data1 %>% 
+  mutate(Yield_Mg = round(Yield_Mg , digits = 2),
+         SE_Mg = round(SE_Mg , digits = 2))
+
+benefit_gs_ndvi_percent <- ( ( (benefit_data3$Yield_Mg[1] - benefit_data3$Yield_Mg[4]) / benefit_data3$Yield_Mg[9] ) - 1 ) * 100 #calculates percent differentiation
+
+print( round( benefit_gs_ndvi_percent , digits = 0 ) )
+
+benefit_uas_ndre_percent <- ( ( (benefit_data3$Yield_Mg[5] - benefit_data3$Yield_Mg[8]) / benefit_data3$Yield_Mg[9] ) - 1 ) * 100 #calculates percent differentiation
+
+print( round( benefit_uas_ndre_percent , digits = 0 ) )
+
+```
+
+
+## Plots
+
+### overall average
+
+```{r}
+
+
+Fig6.1 <- ggplot(data = benefit_without_si , aes ( x = Sufficiency_Index  , y = Yield_Mg)) +
+  geom_bar(stat = "identity" , width = 0.30 , fill = "black" , color = "black" , alpha = 0.9) +
+  geom_errorbar( data = benefit_without_si , aes( y = Yield_Mg , ymax = (Yield_Mg + SE_Mg) , ymin = (Yield_Mg - SE_Mg) ) , alpha = 1 , width = 0.075 , size = 1 )  +
+  labs(title = "(a)" , x = "Overall Average" , y = "Estimated Grain Yield Response ( Mg ha"^-1~")") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 46),
+        axis.title = element_text(size = 46),
+        axis.text.x = element_text(color = "white"),
+        panel.background = element_rect(fill = "white", color = "grey0"),
+        plot.title = element_text(size = 46 , hjust = 0.5)) +
+  coord_cartesian(ylim = c(-0.25 , 1.5 )) +
+  scale_y_continuous(breaks = seq(-0.5 , 1.5 , by = .5 )) +
+  geom_hline(yintercept = 0)
+  
+Fig6.1
+
+ggsave("FIGURES/NOT_IN_PUBLICATION/Fig6.1.pdf" , Fig6.1 , width = 14 , height = 13, dpi = 10000)
+
+```
+
+### with SI
+
+```{r}
+
+Fig6.2 <- ggplot(data = benefit_data2 , aes ( x = Sufficiency_Index  , y = Yield_Mg , fill = Platform , color = Platform , alpha = Platform)) +
+  geom_bar(position = "dodge" , stat = "identity" , width = 0.60) +
+  geom_errorbar( data = benefit_data2 , aes( y = Yield_Mg , ymax = (Yield_Mg + SE_Mg) , ymin = (Yield_Mg - SE_Mg) ) , alpha = 1 , width = .25 , size = .5 , position = position_dodge(.6) , show.legend = F)  +
+  labs(title = "(b)" , 
+       x = "Sufficiency-Index" , 
+       y = NULL , 
+       color = "Index" , 
+       fill = "Index" , 
+       alpha = "Index") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 46),
+        axis.title = element_text(size = 46),
+        panel.background = element_rect(fill = "white", color = "grey0"),
+        plot.title = element_text(size = 46 , hjust = 0.5),
+        axis.text.y = element_blank(),
+        legend.title = element_text(size = 38 , hjust = 0.5),
+        legend.text = element_text(size = 38 , hjust = 0),
+        legend.position = c(0.88 , 0.88 ),
+        legend.box.background = element_rect(size = 1)) +
+  coord_cartesian(ylim = c(-0.25 , 1.5)) +
+  scale_y_continuous(breaks = seq(-0.5 , 1.5 , by = .25 )) +
+  geom_hline(yintercept = 0) +
+  scale_color_manual("Index" , breaks = c( "NDRE[UAS]" ,  "NDVI[GS]" ) , values = c( "black" ,  "black") , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+  scale_fill_manual("Index" , breaks = c(  "NDRE[UAS]" , "NDVI[GS]" ) , values = c( "grey30" ,  "grey70") , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) )) +
+    scale_alpha_manual("Index" , breaks = c(  "NDRE[UAS]" , "NDVI[GS]" ) , values = c( 1 , 1) , labels = c(  expression(NDRE[UAS]) , expression(NDVI[GS]) ))
+  
+Fig6.2
+
+
+ggsave("FIGURES/NOT_IN_PUBLICATION/Fig6.2.pdf" , Fig6.2 , width = 14 , height = 13, dpi = 10000)
+
+```
+
+
+# FIG 6
+
+```{r}
+
+Fig6 <- grid.arrange(arrangeGrob(Fig6.1 , Fig6.2 , nrow = 1 , ncol = 2 , widths = c(1.9 , 4)))
+
+Fig6
+
+ggsave("FIGURES/Fig6.pdf" , Fig6 , width = 25 , height = 13, dpi = 1000)
+
+```
+
+## Results for Paper
+
+```{r}
+
+print(round(min(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2)) #min and max ndvi gs SI for table 3
+print(round(max(paper2_data_OR$gs_NDVI_Sufficiency_Index) , digits = 2))
+
+print(round(min(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2)) #min and max ndre uas SI for table 3
+print(round(max(paper2_data_OR$uas_NDRE_Sufficiency_Index) , digits = 2))
+
+nrow(paper2_data_OR) #number of observations for table 3
+
+unique(paper2_data_OR$site_year)
+
+```
+
